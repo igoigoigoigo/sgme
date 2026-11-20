@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from sgme.domain.entidades import StatusTecnico
+from sgme.domain.especialidades import rotulo
 from sgme.domain.sla import Criticidade
 from sgme.domain.status_os import StatusOS
 from sgme.services.ordem_servico import ResumoOS
@@ -55,7 +56,12 @@ def sla(r: ResumoOS) -> Celula:
     return (f"até {r.prazo:%d/%m %H:%M}" if r.prazo else "—", "")
 
 
+def especialidades(valores, vazio: str = "—") -> str:
+    return rotulo(valores, vazio)
+
+
 def linha_os(r: ResumoOS) -> list[Celula]:
     o = r.ordem
-    return [f"#{o.id}", r.equipamento, o.falha_apontada, criticidade(o.criticidade),
-            status(o.status), r.tecnico or "—", sla(r)]
+    return [f"#{o.id}", r.equipamento, o.falha_apontada,
+            (especialidades(o.especialidades, "qualquer"), "" if o.especialidades else Cor.CINZA),
+            criticidade(o.criticidade), status(o.status), r.tecnico or "—", sla(r)]

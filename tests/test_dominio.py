@@ -8,6 +8,9 @@ from sgme.domain.sla import Criticidade, politica_sla
 from sgme.domain.status_os import StatusOS, estado_de
 
 
+TEC5 = Usuario("Tecnico Cinco", "Técnico", id=5)
+
+
 def nova_os(**kw) -> OrdemServico:
     base = dict(equipamento_id=1, criador_id=1, falha_apontada="Ruído", criticidade="Alta", id=1)
     base.update(kw)
@@ -39,12 +42,12 @@ class TestValidacoes:
 class TestMaquinaDeEstados:
     def test_atribuir_move_para_em_andamento(self):
         o = nova_os()
-        o.atribuir(5)
+        o.atribuir(TEC5)
         assert o.status is StatusOS.EM_ANDAMENTO and o.tecnico_id == 5
 
     def test_nao_pode_concluir_sem_reparo_finalizado(self):
         o = nova_os()
-        o.atribuir(5)
+        o.atribuir(TEC5)
         with pytest.raises(TransicaoInvalida):
             o.encerrar(True, "ok", datetime.now())
 
@@ -57,12 +60,12 @@ class TestMaquinaDeEstados:
         o = nova_os()
         o.encerrar(False, "duplicada", datetime.now())
         with pytest.raises(TransicaoInvalida):
-            o.atribuir(5)
+            o.atribuir(TEC5)
         assert estado_de(o.status).transicoes == frozenset()
 
     def test_apenas_tecnico_atribuido_trabalha(self):
         o = nova_os()
-        o.atribuir(5)
+        o.atribuir(TEC5)
         with pytest.raises(TransicaoInvalida):
             o.registrar_diagnostico(6, "x")
 
@@ -72,7 +75,7 @@ class TestMaquinaDeEstados:
 
     def test_apontamento_acumula_horas_e_pecas(self):
         o = nova_os()
-        o.atribuir(5)
+        o.atribuir(TEC5)
         o.apontar_reparo(5, "1,5", "Rolamento")
         o.apontar_reparo(5, 2, "Correia")
         assert o.horas_trabalhadas == 3.5
@@ -81,13 +84,13 @@ class TestMaquinaDeEstados:
     @pytest.mark.parametrize("horas", ["abc", 0, -1, 25])
     def test_apontamento_rejeita_horas_invalidas(self, horas):
         o = nova_os()
-        o.atribuir(5)
+        o.atribuir(TEC5)
         with pytest.raises(DadosInvalidos):
             o.apontar_reparo(5, horas, "")
 
     def test_devolver_para_execucao(self):
         o = nova_os()
-        o.atribuir(5)
+        o.atribuir(TEC5)
         o.alterar_status_operacional(5, StatusOS.REPARO_FINALIZADO)
         o.devolver_para_execucao("ainda vaza")
         assert o.status is StatusOS.EM_EXECUCAO

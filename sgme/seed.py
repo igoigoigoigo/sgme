@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 
 from sgme.container import Container, montar
 from sgme.domain.entidades import Equipamento, Perfil, Usuario
+from sgme.domain.especialidades import Especialidade
 from sgme.domain.status_os import StatusOS
 
 
@@ -18,8 +19,13 @@ def popular_se_vazio(container: Container) -> bool:
         return False
 
     gestor = repos.usuarios.adicionar(Usuario("Gestor Admin", Perfil.GESTOR))
-    joao = repos.usuarios.adicionar(Usuario("Tecnico Joao", Perfil.TECNICO))
-    maria = repos.usuarios.adicionar(Usuario("Tecnica Maria", Perfil.TECNICO))
+    joao = repos.usuarios.adicionar(Usuario(
+        "Tecnico Joao", Perfil.TECNICO,
+        especialidades=[Especialidade.MECANICA, Especialidade.HIDRAULICA]))
+    maria = repos.usuarios.adicionar(Usuario(
+        "Tecnica Maria", Perfil.TECNICO,
+        especialidades=[Especialidade.ELETRICA, Especialidade.ELETRONICA, Especialidade.MECANICA]))
+    # Carlos não tem especialidade: só pode receber OS que não exijam nenhuma
     repos.usuarios.adicionar(Usuario("Tecnico Carlos", Perfil.TECNICO))
 
     torno = repos.equipamentos.adicionar(
@@ -33,11 +39,13 @@ def popular_se_vazio(container: Container) -> bool:
 
     # Uma OS aberta há 6 horas (com relógio injetado) para demonstrar SLA estourado
     passado = montar(repos, relogio=lambda: datetime.now() - timedelta(hours=6))
-    os1 = passado.ordens.abrir(gestor, prensa.id, "Vazamento de óleo no cilindro principal", "Alta")
+    os1 = passado.ordens.abrir(gestor, prensa.id, "Vazamento de óleo no cilindro principal", "Alta",
+                               [Especialidade.HIDRAULICA])
     passado.ordens.atribuir(gestor, os1.id, joao.id)
 
     ordens = container.ordens
-    os2 = ordens.abrir(joao, compressor.id, "Ruído anormal e aquecimento no cabeçote", "Média")
+    os2 = ordens.abrir(joao, compressor.id, "Ruído anormal e aquecimento no cabeçote", "Média",
+                       [Especialidade.MECANICA, Especialidade.ELETRICA])
     ordens.atribuir(gestor, os2.id, maria.id)
     ordens.registrar_diagnostico(maria, os2.id, "Rolamento do motor com desgaste")
     ordens.alterar_status(maria, os2.id, StatusOS.AGUARDANDO_PECA)

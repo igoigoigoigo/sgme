@@ -1,8 +1,13 @@
 """Serviços de cadastro: usuários e equipamentos."""
 from __future__ import annotations
 
+from typing import Iterable
+
 from sgme.domain.entidades import Equipamento, FiltroOS, Perfil, Usuario
-from sgme.domain.excecoes import DadosInvalidos, NaoEncontrado, TransicaoInvalida
+from sgme.domain.especialidades import Especialidade, faltantes, normalizar, rotulo
+from sgme.domain.excecoes import (
+    DadosInvalidos, EspecialidadeIncompativel, NaoEncontrado, TransicaoInvalida,
+)
 from sgme.repositories.interfaces import (
     EquipamentoRepository, OrdemServicoRepository, UsuarioRepository,
 )
@@ -10,8 +15,9 @@ from .permissoes import Acao, FabricaPoliticaAcesso
 
 
 class UsuarioService:
-    def __init__(self, usuarios: UsuarioRepository) -> None:
+    def __init__(self, usuarios: UsuarioRepository, ordens: OrdemServicoRepository) -> None:
         self._usuarios = usuarios
+        self._ordens = ordens
 
     def listar(self) -> list[Usuario]:
         return self._usuarios.listar()
@@ -25,13 +31,38 @@ class UsuarioService:
             raise NaoEncontrado(f"Usuário #{usuario_id} não encontrado.")
         return usuario
 
-    def cadastrar(self, ator: Usuario, nome: str, perfil: str) -> Usuario:
+    def cadastrar(self, ator: Usuario, nome: str, perfil: str,
+                  especialidades: Iterable[Especialidade | str] = ()) -> Usuario:
         FabricaPoliticaAcesso.criar(ator).exigir(Acao.GERENCIAR_USUARIOS)
         try:
             perfil_enum = Perfil(perfil)
         except ValueError as exc:
             raise DadosInvalidos(f"Perfil inválido: {perfil!r}") from exc
-        return self._usuarios.adicionar(Usuario(nome=nome, perfil=perfil_enum))
+        return self._usuarios.adicionar(
+            Usuario(nome=nome, perfil=perfil_enum, especialidades=especialidades)
+        )
+
+    def definir_especialidades(self, ator: Usuario, usuario_id: int,
+                               especialidades: Iterable[Especialidade | str]) -> Usuario:
+        """Altera as especialidades do usuário. Bloqueado se ele tiver OS ativa
+        que exija uma especialidade que estaria sendo removida."""
+        FabricaPoliticaAcesso.criar(ator).exigir(Acao.GERENCIAR_USUARIOS)
+        usuario = self.obter(usuario_id)
+        novas = normalizar(especialidades)
+        conflitos = [
+            (o.id, faltantes(o.especialidades, novas))
+            for o in self._ordens.listar(FiltroOS(tecnico_id=usuario_id, apenas_ativas=True))
+            if faltantes(o.especialidades, novas)
+        ]
+        if conflitos:
+            detalhes = "; ".join(f"OS #{i} exige {rotulo(f)}" for i, f in conflitos)
+            raise EspecialidadeIncompativel(
+                f"{usuario.nome} possui OS ativas que dependem dessas especialidades ({detalhes}). "
+                "Reatribua as OS antes de removê-las."
+            )
+        usuario.especialidades = novas
+        self._usuarios.atualizar(usuario)
+        return usuario
 
 
 class EquipamentoService:
