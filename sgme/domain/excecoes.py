@@ -23,3 +23,7 @@ class AcessoNegado(ErroDominio):
 
 class TransicaoInvalida(ErroDominio):
     """Mudança de status não permitida pela máquina de estados da OS."""
+
+
+class EspecialidadeIncompativel(ErroDominio):
+    """O técnico não possui as especialidades exigidas pela OS."""

@@ -15,6 +15,8 @@ def atende_filtro(ordem: OrdemServico, filtro: FiltroOS | None) -> bool:
         return False
     if filtro.equipamento_id is not None and ordem.equipamento_id != filtro.equipamento_id:
         return False
+    if filtro.especialidade is not None and filtro.especialidade not in ordem.especialidades:
+        return False
     if filtro.apenas_ativas and ordem.finalizada:
         return False
     if filtro.texto:

@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 
+from .especialidades import Especialidade, Especialidades, exigir_compatibilidade, normalizar
 from .excecoes import DadosInvalidos, TransicaoInvalida
 from .sla import Criticidade
 from .status_os import StatusOS, estado_de, EstadoOS
@@ -48,11 +49,13 @@ class Usuario:
     perfil: Perfil
     status: StatusTecnico = StatusTecnico.DISPONIVEL
     id: int | None = None
+    especialidades: Especialidades = frozenset()  # zero, uma ou várias
 
     def __post_init__(self) -> None:
         self.nome = _texto_obrigatorio(self.nome, "nome", 100)
         self.perfil = Perfil(self.perfil)
         self.status = StatusTecnico(self.status)
+        self.especialidades = normalizar(self.especialidades)
 
     @property
     def eh_tecnico(self) -> bool:
@@ -103,8 +106,10 @@ class OrdemServico:
     data_abertura: datetime | None = None
     data_encerramento: datetime | None = None
     id: int | None = None
+    especialidades: Especialidades = frozenset()  # exigidas do técnico; vazio = qualquer um
 
     def __post_init__(self) -> None:
+        self.especialidades = normalizar(self.especialidades)
         self.falha_apontada = _texto_obrigatorio(self.falha_apontada, "falha apontada", 1000)
         if not isinstance(self.criticidade, Criticidade):
             try:
@@ -131,16 +136,21 @@ class OrdemServico:
             )
         self.status = destino
 
-    def atribuir(self, tecnico_id: int) -> int | None:
-        """Atribui (ou reatribui) o técnico. Retorna o técnico anterior."""
+    def atribuir(self, tecnico: "Usuario") -> int | None:
+        """Atribui (ou reatribui) o técnico. Retorna o id do técnico anterior.
+
+        Bloqueia técnicos que não possuem todas as especialidades exigidas."""
         if not self.estado.aceita_atribuicao:
             raise TransicaoInvalida(
                 f"Não é possível atribuir técnico a uma OS '{self.status}'."
             )
+        if not tecnico.eh_tecnico:
+            raise DadosInvalidos(f"{tecnico.nome} não é um técnico.")
         anterior = self.tecnico_id
-        if anterior == tecnico_id:
+        if anterior == tecnico.id:
             raise DadosInvalidos("Este técnico já está atribuído a esta OS.")
-        self.tecnico_id = tecnico_id
+        exigir_compatibilidade(self.especialidades, tecnico.especialidades, tecnico.nome)
+        self.tecnico_id = tecnico.id
         if self.status is StatusOS.ABERTA:
             self._transitar(StatusOS.EM_ANDAMENTO)
         return anterior
@@ -182,6 +192,16 @@ class OrdemServico:
         self._transitar(StatusOS.CONCLUIDA if aprovar else StatusOS.CANCELADA)
         self.data_encerramento = agora
 
+    def definir_especialidades(self, novas, tecnico_atual: "Usuario | None") -> None:
+        """Altera as especialidades exigidas. Se já houver técnico atribuído,
+        ele precisa continuar compatível; caso contrário a alteração é bloqueada."""
+        if self.finalizada:
+            raise TransicaoInvalida("Não é possível alterar especialidades de uma OS finalizada.")
+        novas = normalizar(novas)
+        if tecnico_atual is not None:
+            exigir_compatibilidade(novas, tecnico_atual.especialidades, tecnico_atual.nome)
+        self.especialidades = novas
+
     def devolver_para_execucao(self, parecer: str) -> None:
         """Gestor reprova o reparo finalizado e devolve ao técnico."""
         if self.status is not StatusOS.REPARO_FINALIZADO:
@@ -198,5 +218,6 @@ class FiltroOS:
     criticidade: Criticidade | None = None
     tecnico_id: int | None = None
     equipamento_id: int | None = None
+    especialidade: Especialidade | None = None  # OS que exigem esta especialidade
     texto: str | None = None
     apenas_ativas: bool = False

@@ -43,6 +43,18 @@ CREATE TABLE IF NOT EXISTS ordens_servico (
     FOREIGN KEY(criador_id) REFERENCES usuarios(id),
     FOREIGN KEY(tecnico_id) REFERENCES usuarios(id)
 );
+CREATE TABLE IF NOT EXISTS usuario_especialidades (
+    usuario_id INTEGER NOT NULL,
+    especialidade TEXT NOT NULL,
+    PRIMARY KEY (usuario_id, especialidade),
+    FOREIGN KEY(usuario_id) REFERENCES usuarios(id)
+);
+CREATE TABLE IF NOT EXISTS os_especialidades (
+    os_id INTEGER NOT NULL,
+    especialidade TEXT NOT NULL,
+    PRIMARY KEY (os_id, especialidade),
+    FOREIGN KEY(os_id) REFERENCES ordens_servico(id)
+);
 CREATE TABLE IF NOT EXISTS historico (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     os_id INTEGER,
@@ -62,6 +74,7 @@ _INDICES = """
 CREATE INDEX IF NOT EXISTS idx_os_status ON ordens_servico(status);
 CREATE INDEX IF NOT EXISTS idx_os_tecnico ON ordens_servico(tecnico_id);
 CREATE INDEX IF NOT EXISTS idx_historico_os ON historico(os_id);
+CREATE INDEX IF NOT EXISTS idx_os_especialidade ON os_especialidades(especialidade);
 """
 
 

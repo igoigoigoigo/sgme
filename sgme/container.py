@@ -72,7 +72,7 @@ def montar(repos: Repositorios, relogio: Callable[[], datetime] = datetime.now) 
     eventos.inscrever(RegistroHistoricoObserver(repos.historico))
     eventos.inscrever(DisponibilidadeTecnicoObserver(repos.usuarios, repos.ordens))
 
-    usuarios = UsuarioService(repos.usuarios)
+    usuarios = UsuarioService(repos.usuarios, repos.ordens)
     equipamentos = EquipamentoService(repos.equipamentos, repos.ordens)
     ordens = OrdemServicoService(
         repos.ordens, repos.equipamentos, repos.usuarios, repos.historico, eventos, relogio,

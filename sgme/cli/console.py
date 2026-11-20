@@ -208,6 +208,29 @@ class Console:
         indice = self.inteiro(prompt, range(1, len(opcoes) + 1))
         return opcoes[indice - 1][1]
 
+    def escolher_varios(self, prompt: str, opcoes: Sequence[tuple[str, T]],
+                        atuais: Iterable[T] | None = None) -> list[T]:
+        """Seleção múltipla: '1,3' escolhe vários, '0' = nenhum e Enter mantém
+        os atuais (em um cadastro novo, Enter = nenhum)."""
+        atuais = list(atuais) if atuais is not None else None
+        for i, (rotulo, valor) in enumerate(opcoes, start=1):
+            marca = ""
+            if atuais is not None:
+                marca = self.pintar("■ ", Cor.VERDE) if valor in atuais else self.pintar("□ ", Cor.CINZA)
+            self.escrever(f"    {self.pintar(str(i).rjust(2), Cor.CIANO)}  {marca}{rotulo}")
+        enter = "manter atuais" if atuais is not None else "nenhuma"
+        while True:
+            valor = self._ler(f"{prompt} (ex.: 1,3 · 0 = nenhuma · Enter = {enter})")
+            if not valor:
+                return atuais or []
+            if valor == "0":
+                return []
+            partes = [p for p in valor.replace(";", ",").replace(" ", ",").split(",") if p]
+            if not all(p.isdigit() and 1 <= int(p) <= len(opcoes) for p in partes):
+                self.erro(f"Use números de 1 a {len(opcoes)} separados por vírgula.")
+                continue
+            return [opcoes[int(p) - 1][1] for p in dict.fromkeys(partes)]
+
     def confirmar(self, prompt: str) -> bool:
         while True:
             valor = self._ler(f"{prompt} (s/n)").lower()
