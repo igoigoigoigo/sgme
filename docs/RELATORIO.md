@@ -85,7 +85,7 @@ flowchart TB
 - **Aderência ao problema.** O sistema é CRUD com regras de negócio (ciclo de vida da OS, permissões
   por perfil e SLA), executado por um único processo. Camadas resolvem exatamente o problema número 1
   da tabela acima, sem a complexidade operacional de microsserviços ou de um microkernel.
-- **Testabilidade.** Como os serviços não fazem E/S, os 68 testes chamam os casos de uso diretamente,
+- **Testabilidade.** Como os serviços não fazem E/S, os 102 testes chamam os casos de uso diretamente,
   com relógio falso e repositórios em memória.
 - **Substituição de tecnologia.** A interface pode virar Web ou API, e o SQLite pode virar PostgreSQL,
   trocando apenas a camada correspondente. Os testes da CLI e dos serviços já usam implementações
@@ -318,7 +318,7 @@ nos detalhes da OS.
 - **Migração automática** de bancos da Entrega 1: adiciona `data_abertura` e `data_encerramento`,
   normaliza criticidades ("Media" → "Média", valores inválidos → "Média") e preenche a data de
   abertura a partir do histórico. Isso é coberto por `tests/test_persistencia_legado.py`.
-- 68 testes automatizados (domínio, serviços em duas implementações de repositório, migração e CLI).
+- 102 testes automatizados (domínio, serviços em duas implementações de repositório, migração, especialidades e CLI).
 
 ### 4.2 Regras de negócio novas ou corrigidas
 
@@ -334,6 +334,7 @@ nos detalhes da OS.
 | — | Cadastro, edição e ativação/inativação de equipamentos (impede inativar com OS aberta) |
 | — | Cadastro de usuários (gestor) |
 | — | OS só pode ser aberta para equipamento ativo |
+| Qualquer técnico podia receber qualquer OS | **Especialidades** em usuários e OS (nenhuma, uma ou várias); atribuição incompatível é bloqueada (seção 4.4) |
 
 ### 4.3 Interface (CLI)
 
@@ -352,9 +353,53 @@ A interface continua no terminal, como na Entrega 1, mas foi reformulada:
 - **Entradas validadas:** perguntas repetidas até um valor válido, Enter vazio cancela, confirmação
   antes de cancelar uma OS e Ctrl+C sai sem stack trace.
 - **Detalhes da OS** com todos os campos, SLA, próximos status possíveis e histórico em linha do tempo.
-- **Consulta com filtros:** ativas, todas, por status, por criticidade ou busca por texto.
+- **Consulta com filtros:** ativas, todas, por status, por criticidade, por especialidade exigida ou busca por texto.
+- **Seleção múltipla** de especialidades (`1,3`; `0` = nenhuma; Enter = manter as atuais), com marcadores ■/□
+  mostrando as já selecionadas.
 - **Trocar usuário** sem reiniciar o programa.
 - Suporte a `NO_COLOR` e saída UTF-8 no Windows.
+
+### 4.4 Especialidades técnicas (versão 2.1)
+
+Usuários e ordens de serviço têm um **conjunto** de especialidades do catálogo (Mecânica, Elétrica,
+Eletrônica, Hidráulica, Pneumática, Refrigeração e Automação). O conjunto pode ser vazio ou ter
+várias especialidades, nos dois casos.
+
+**Regra de compatibilidade** (`sgme/domain/especialidades.py`):
+
+| OS exige | Técnico possui | Pode atribuir? |
+|---|---|---|
+| nenhuma | qualquer conjunto, inclusive nenhum | sim |
+| Elétrica | nenhuma | **não** |
+| Elétrica | Elétrica, Mecânica | sim |
+| Elétrica, Hidráulica | Elétrica | **não** (falta Hidráulica) |
+| Elétrica, Hidráulica | Elétrica, Hidráulica, Mecânica | sim |
+
+Ou seja, o técnico precisa ter **todas** as especialidades exigidas pela OS.
+
+**Onde o bloqueio acontece:**
+
+1. **Atribuição:** `OrdemServico.atribuir(tecnico)` chama `exigir_compatibilidade` antes de alterar a OS
+   e lança `EspecialidadeIncompativel`. Como a regra está na entidade, nenhum caminho (CLI, testes,
+   uma futura API) consegue atribuir uma OS incompatível.
+2. **Alteração das especialidades da OS:** se já houver técnico atribuído, as novas exigências precisam
+   continuar compatíveis com ele (`OrdemServico.definir_especialidades`).
+3. **Alteração das especialidades do técnico:** `UsuarioService.definir_especialidades` impede remover
+   uma especialidade da qual alguma OS ativa dele dependa e informa quais OS precisam ser reatribuídas.
+
+**Persistência:** duas tabelas associativas (N:N), `usuario_especialidades` e `os_especialidades`.
+Ausência de linhas significa "nenhuma especialidade". As tabelas são criadas automaticamente,
+inclusive em bancos da Entrega 1. O filtro por especialidade é feito com uma subconsulta no repositório SQLite.
+
+**Na interface:** a abertura de chamado e o cadastro de usuário pedem as especialidades. A tela de
+atribuição lista todos os técnicos com a coluna **"Compatível com a OS"** (✔ sim / ✖ falta X). Duas
+opções novas do gestor permitem editar as especialidades de uma OS ou de um usuário. O cabeçalho
+do técnico mostra as especialidades dele.
+
+**Princípios aplicados:** a regra fica no domínio (SRP) e é reutilizada por entidade, serviço e CLI.
+Para incluir uma especialidade, basta acrescentar um membro à enumeração `Especialidade`, sem mexer em
+regra, banco ou tela (OCP). Os repositórios em memória e SQLite passam pelos mesmos testes de
+especialidades (LSP).
 
 ---
 
@@ -362,11 +407,15 @@ A interface continua no terminal, como na Entrega 1, mas foi reformulada:
 
 O projeto usa Git com um fluxo inspirado no **Git Flow**:
 
-- `main`: versões entregues, marcadas com tags (`v1.0` = Entrega 1, `v2.0` = Entrega 2).
+- `main`: versões entregues, marcadas com tags (`v1.0` = Entrega 1, `v2.0` = Entrega 2,
+  `v2.0.1` = correção, `v2.1` = especialidades).
 - `develop`: integração.
 - `feature/*`, `test/*`, `docs/*`: uma branch por frente de trabalho, integrada em `develop` com
   `merge --no-ff` para preservar o agrupamento dos commits.
-- `release/2.0`: estabilização antes de ir para `main`.
+- `release/*` e `hotfix/*`: estabilização e correções antes de ir para `main`
+  (`release/2.0`, `hotfix/2.0.1`, `release/2.1`).
+- A funcionalidade de especialidades foi desenvolvida em `feature/especialidades`, com um commit por
+  camada (domínio → persistência → serviços → CLI → testes → docs).
 
 As mensagens seguem o padrão **Conventional Commits** (`feat`, `refactor`, `test`, `docs`), com escopo
 indicando a camada (`feat(dominio)`, `feat(persistencia)`…).
@@ -396,7 +445,8 @@ indicando a camada (`feat(dominio)`, `feat(persistencia)`…).
 * feat: versão CLI da Entrega 1 (SGME)          ← tag v1.0
 ```
 
-O histórico completo, incluindo os merges de `docs/relatorio` e `release/2.0`, pode ser visto com:
+O histórico completo, incluindo `docs/relatorio`, `release/*`, `hotfix/2.0.1` e `feature/especialidades`,
+pode ser visto com:
 
 ```powershell
 git log --graph --oneline --all
@@ -434,12 +484,17 @@ python main.py
 
 1. Entre como **Gestor Admin**. O painel mostra uma OS de prioridade Alta **ATRASADA**.
 2. Abra **Fila priorizada por SLA** para ver a ordem de atendimento.
-3. Use **Abrir novo chamado** e escolha equipamento e criticidade a partir das listas.
-4. Use **Atribuir / reatribuir técnico** para alocar a nova OS ao Técnico Carlos.
-5. Digite `T` e entre como **Tecnico Carlos**. Registre o diagnóstico, aponte horas e peças e mude o
+3. Use **Abrir novo chamado**, escolha equipamento e criticidade e, em especialidades, pressione
+   Enter (nenhuma).
+4. Use **Atribuir / reatribuir técnico**, escolha a **OS #1** (exige Hidráulica) e tente o técnico `4`
+   (Carlos, sem especialidade). A coluna mostra "✖ falta Hidráulica" e a atribuição é **bloqueada**.
+5. Repita com a nova OS e atribua ao Carlos: como ela não exige especialidade, a atribuição é aceita.
+6. Digite `T` e entre como **Tecnico Carlos**. Registre o diagnóstico, aponte horas e peças e mude o
    status para "Reparo Finalizado".
-6. Digite `T` e entre como gestor. Em **Aprovar, devolver ou cancelar OS**, aprove a OS.
-7. Abra **Detalhes e histórico** da OS para ver a linha do tempo completa. Em **Disponibilidade da
+7. Digite `T` e entre como gestor. Em **Aprovar, devolver ou cancelar OS**, aprove a OS.
+8. Em **Definir especialidades de usuário**, tente remover "Hidráulica" do Técnico João: a operação é
+   bloqueada porque a OS #1 dele exige essa especialidade.
+9. Abra **Detalhes e histórico** da OS para ver a linha do tempo completa. Em **Disponibilidade da
    equipe**, Carlos voltou a "Disponível".
 
 ### 6.4 Rodar os testes
@@ -449,4 +504,4 @@ python -m pip install -r requirements.txt
 python -m pytest -v
 ```
 
-Resultado esperado: `68 passed`.
+Resultado esperado: `102 passed`.
