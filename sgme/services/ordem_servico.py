@@ -165,7 +165,7 @@ class OrdemServicoService:
         ordem = self._carregar(os_id)
         antes = ordem.horas_trabalhadas
         ordem.apontar_reparo(ator.id, horas, pecas)
-        texto = f"Apontamento de {ator.nome}: {ordem.horas_trabalhadas - antes:g} h"
+        texto = f"Apontamento de {ator.nome}: {ordem.horas_trabalhadas - antes:g} h".replace(".", ",")
         if pecas and pecas.strip():
             texto += f"; peças: {pecas.strip()}"
         return self._salvar_e_publicar(ordem, TipoEvento.APONTAMENTO, texto)

@@ -47,7 +47,7 @@ class UsuarioRepositorySQLite(_RepositorioSQLite, UsuarioRepository):
         if perfil is not None:
             sql, params = sql + " WHERE perfil = ?", (perfil.value,)
         with self._db.conexao() as c:
-            return [self._mapear(r) for r in c.execute(sql + " ORDER BY nome", params)]
+            return [self._mapear(r) for r in c.execute(sql + " ORDER BY id", params)]
 
     def adicionar(self, usuario: Usuario) -> Usuario:
         with self._db.conexao() as c:
@@ -82,7 +82,7 @@ class EquipamentoRepositorySQLite(_RepositorioSQLite, EquipamentoRepository):
         if apenas_ativos:
             sql += " WHERE ativo = 1"
         with self._db.conexao() as c:
-            return [self._mapear(r) for r in c.execute(sql + " ORDER BY nome")]
+            return [self._mapear(r) for r in c.execute(sql + " ORDER BY id")]
 
     def adicionar(self, equipamento: Equipamento) -> Equipamento:
         with self._db.conexao() as c:
