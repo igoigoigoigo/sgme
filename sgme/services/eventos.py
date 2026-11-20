@@ -29,6 +29,7 @@ class TipoEvento(str, Enum):
     APONTAMENTO = "apontamento"
     STATUS_ALTERADO = "status_alterado"
     DEVOLVIDA = "devolvida"
+    ESPECIALIDADES = "especialidades"
     ENCERRADA = "encerrada"
 
 

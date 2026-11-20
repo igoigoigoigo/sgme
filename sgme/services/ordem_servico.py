@@ -3,11 +3,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Callable
+from typing import Callable, Iterable
 
 from sgme.domain.entidades import (
     Equipamento, EventoHistorico, FiltroOS, OrdemServico, Usuario,
 )
+from sgme.domain.especialidades import Especialidade, Especialidades, faltantes, rotulo
 from sgme.domain.excecoes import DadosInvalidos, NaoEncontrado
 from sgme.domain.sla import PoliticaSLA, politica_sla
 from sgme.domain.status_os import STATUS_OPERACIONAIS_TECNICO, StatusOS
@@ -109,6 +110,13 @@ class OrdemServicoService:
             key=lambda r: (not r.atrasada, -r.sla.peso, r.ordem.id),
         )
 
+    def tecnicos_para(self, os_id: int) -> list[tuple[Usuario, Especialidades]]:
+        """Todos os técnicos, cada um com as especialidades que lhe faltam para
+        atender a OS (conjunto vazio = compatível)."""
+        ordem = self._carregar(os_id)
+        return [(t, faltantes(ordem.especialidades, t.especialidades))
+                for t in self._usuarios.listar() if t.eh_tecnico]
+
     def detalhar(self, os_id: int) -> DetalheOS:
         ordem = self._carregar(os_id)
         criador = self._usuarios.obter(ordem.criador_id)
@@ -119,7 +127,8 @@ class OrdemServicoService:
         )
 
     # --------------------------------------------------------------- comandos
-    def abrir(self, ator: Usuario, equipamento_id: int, falha: str, criticidade: str) -> OrdemServico:
+    def abrir(self, ator: Usuario, equipamento_id: int, falha: str, criticidade: str,
+              especialidades: Iterable[Especialidade | str] = ()) -> OrdemServico:
         FabricaPoliticaAcesso.criar(ator).exigir(Acao.ABRIR_OS)
         equipamento = self._equipamentos.obter(equipamento_id)
         if equipamento is None:
@@ -129,11 +138,13 @@ class OrdemServicoService:
         ordem = OrdemServico(
             equipamento_id=equipamento_id, criador_id=ator.id, falha_apontada=falha,
             criticidade=criticidade, data_abertura=self._agora(),
+            especialidades=especialidades,
         )
         self._ordens.adicionar(ordem)
         self._eventos.publicar(EventoOS(
             TipoEvento.ABERTA, ordem.id,
             f"OS aberta por {ator.nome}. Criticidade {ordem.criticidade}. "
+            f"Especialidades exigidas: {rotulo(ordem.especialidades)}. "
             f"Falha reportada: {ordem.falha_apontada}",
             self._agora(),
         ))
@@ -145,11 +156,28 @@ class OrdemServicoService:
         tecnico = self._usuarios.obter(tecnico_id)
         if tecnico is None or not tecnico.eh_tecnico:
             raise DadosInvalidos(f"Usuário #{tecnico_id} não é um técnico válido.")
-        anterior = ordem.atribuir(tecnico.id)
+        anterior = ordem.atribuir(tecnico)  # bloqueia técnico sem as especialidades exigidas
         acao = "reatribuída" if anterior else "atribuída"
         return self._salvar_e_publicar(
             ordem, TipoEvento.ATRIBUIDA, f"OS {acao} ao técnico {tecnico.nome} por {ator.nome}.",
             (anterior, tecnico.id),
+        )
+
+    def definir_especialidades(self, ator: Usuario, os_id: int,
+                               especialidades: Iterable[Especialidade | str]) -> OrdemServico:
+        """Altera as especialidades exigidas pela OS. Bloqueado se o técnico já
+        atribuído deixar de ser compatível."""
+        FabricaPoliticaAcesso.criar(ator).exigir(Acao.ATRIBUIR_OS)
+        ordem = self._carregar(os_id)
+        tecnico = self._usuarios.obter(ordem.tecnico_id) if ordem.tecnico_id else None
+        anteriores = ordem.especialidades
+        ordem.definir_especialidades(especialidades, tecnico)
+        if ordem.especialidades == anteriores:
+            return ordem
+        return self._salvar_e_publicar(
+            ordem, TipoEvento.ESPECIALIDADES,
+            f"Especialidades exigidas alteradas por {ator.nome}: "
+            f"{rotulo(anteriores)} → {rotulo(ordem.especialidades)}.",
         )
 
     def registrar_diagnostico(self, ator: Usuario, os_id: int, diagnostico: str) -> OrdemServico:
