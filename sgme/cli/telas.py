@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from sgme.container import Container
 from sgme.domain.entidades import FiltroOS, Perfil, StatusTecnico, Usuario
+from sgme.domain.especialidades import Especialidade, rotulo
 from sgme.domain.sla import Criticidade, politica_sla
 from sgme.domain.status_os import STATUS_OPERACIONAIS_TECNICO, StatusOS, estado_de
 from sgme.services.ordem_servico import ResumoOS
@@ -15,7 +16,8 @@ from .console import Cancelado, Coluna, Console, Cor
 
 COLUNAS_OS = [
     Coluna("OS", 4, direita=True), Coluna("Equipamento", 10, flex=True),
-    Coluna("Falha", 10, flex=True), Coluna("Criticid.", 5), Coluna("Status", 6),
+    Coluna("Falha", 10, flex=True), Coluna("Especialidades", 8, flex=True),
+    Coluna("Criticid.", 5), Coluna("Status", 6),
     Coluna("Técnico", 7, flex=True), Coluna("SLA", 8),
 ]
 
@@ -55,6 +57,32 @@ def _escolher_criticidade(con: Console) -> Criticidade:
         for c in (Criticidade.ALTA, Criticidade.MEDIA, Criticidade.BAIXA)
     ]
     return con.escolher("Criticidade", opcoes)
+
+
+def _escolher_especialidades(con: Console, prompt: str,
+                             atuais: frozenset[Especialidade] | None = None) -> list[Especialidade]:
+    return con.escolher_varios(prompt, [(e.value, e) for e in Especialidade], atuais)
+
+
+def _tabela_tecnicos(con: Console, linhas: list[tuple[Usuario, frozenset | None]], ativas) -> None:
+    """Tabela da equipe. Se `faltantes` vier preenchido, mostra a compatibilidade com a OS."""
+    colunas = [Coluna("ID", 3, direita=True), Coluna("Nome", 8, flex=True),
+               Coluna("Especialidades", 10, flex=True), Coluna("Status", 10),
+               Coluna("OS ativas", 3, direita=True)]
+    com_compat = any(f is not None for _, f in linhas)
+    if com_compat:
+        colunas.append(Coluna("Compatível com a OS", 10, flex=True))
+    tabela = []
+    for t, falta in linhas:
+        linha = [f"#{t.id}", t.nome, (fmt.especialidades(t.especialidades, "nenhuma"),
+                                      "" if t.especialidades else Cor.CINZA),
+                 (t.status.value, fmt.COR_TECNICO[t.status]),
+                 str(sum(1 for r in ativas if r.ordem.tecnico_id == t.id))]
+        if com_compat:
+            linha.append(("✔ sim", Cor.VERDE) if not falta
+                         else (f"✖ falta {rotulo(falta)}", Cor.VERMELHO))
+        tabela.append(linha)
+    con.tabela(colunas, tabela, "Nenhum técnico cadastrado.")
 
 
 # ------------------------------------------------------------------- painel
@@ -106,12 +134,16 @@ def listar_os(s: Sessao) -> None:
         ("Todas", FiltroOS()),
         ("Por status", "status"),
         ("Por criticidade", "criticidade"),
+        ("Por especialidade exigida", "especialidade"),
         ("Buscar texto (nº, falha ou diagnóstico)", "texto"),
     ])
     if filtro == "status":
         filtro = FiltroOS(status=con.escolher("Status", [(st.value, st) for st in StatusOS]))
     elif filtro == "criticidade":
         filtro = FiltroOS(criticidade=_escolher_criticidade(con))
+    elif filtro == "especialidade":
+        filtro = FiltroOS(especialidade=con.escolher(
+            "Especialidade", [(e.value, e) for e in Especialidade]))
     elif filtro == "texto":
         filtro = FiltroOS(texto=con.texto("Texto"))
     resumos = s.container.ordens.listar(filtro)
@@ -141,6 +173,7 @@ def detalhes_os(s: Sessao) -> None:
     con.secao(f"OS #{o.id} — {r.equipamento}")
     con.campo("Status", o.status.value, fmt.COR_STATUS[o.status])
     con.campo("Criticidade", o.criticidade.value, fmt.COR_CRITICIDADE[o.criticidade])
+    con.campo("Especialidades", rotulo(o.especialidades, "nenhuma exigida (qualquer técnico)"))
     sla_txt, sla_cor = fmt.sla(r)
     con.campo("SLA", sla_txt, sla_cor)
     con.campo("Aberta por", f"{d.criador} em {fmt.data(o.data_abertura)}")
@@ -180,13 +213,7 @@ def equipe(s: Sessao) -> None:
     con = s.console
     con.secao("Disponibilidade da equipe técnica")
     ativas = s.container.ordens.listar(FiltroOS(apenas_ativas=True))
-    con.tabela(
-        [Coluna("ID", 3, direita=True), Coluna("Nome", 8, flex=True), Coluna("Status", 10),
-         Coluna("OS ativas", 3, direita=True)],
-        [[f"#{t.id}", t.nome, (t.status.value, fmt.COR_TECNICO[t.status]),
-          str(sum(1 for r in ativas if r.ordem.tecnico_id == t.id))]
-         for t in s.container.usuarios.listar_tecnicos()],
-    )
+    _tabela_tecnicos(con, [(t, None) for t in s.container.usuarios.listar_tecnicos()], ativas)
 
 
 # --------------------------------------------------------------- comandos OS
@@ -201,8 +228,10 @@ def abrir_chamado(s: Sessao) -> None:
                                          for e in equipamentos])
     falha = con.texto("Descrição da falha")
     crit = _escolher_criticidade(con)
-    ordem = s.container.ordens.abrir(s.usuario, eq_id, falha, crit.value)
-    con.sucesso(f"Chamado aberto: OS #{ordem.id} ({ordem.criticidade}).")
+    esp = _escolher_especialidades(con, "Especialidades exigidas")
+    ordem = s.container.ordens.abrir(s.usuario, eq_id, falha, crit.value, esp)
+    con.sucesso(f"Chamado aberto: OS #{ordem.id} ({ordem.criticidade}; "
+                f"especialidades: {rotulo(ordem.especialidades)}).")
 
 
 def atribuir_os(s: Sessao) -> None:
@@ -210,11 +239,30 @@ def atribuir_os(s: Sessao) -> None:
     pendentes = [r for r in s.container.ordens.fila_priorizada()
                  if r.ordem.estado.aceita_atribuicao]
     os_id = _selecionar_os(s, pendentes, "OS que aceitam atribuição")
-    equipe(s)
-    tecnicos = s.container.usuarios.listar_tecnicos()
-    tec_id = con.inteiro("ID do técnico", {t.id for t in tecnicos})
+    ordem = next(r.ordem for r in pendentes if r.ordem.id == os_id)
+    candidatos = s.container.ordens.tecnicos_para(os_id)
+    con.secao(f"Técnicos para a OS #{os_id} · exige: "
+              f"{rotulo(ordem.especialidades, 'nenhuma especialidade')}")
+    _tabela_tecnicos(con, candidatos, s.container.ordens.listar(FiltroOS(apenas_ativas=True)))
+    if not any(not falta for _, falta in candidatos):
+        con.aviso("Nenhum técnico possui todas as especialidades exigidas. "
+                  "Ajuste as especialidades da OS ou do técnico.")
+        return
+    tec_id = con.inteiro("ID do técnico", {t.id for t, _ in candidatos})
     s.container.ordens.atribuir(s.usuario, os_id, tec_id)
     con.sucesso(f"OS #{os_id} atribuída.")
+
+
+def definir_especialidades_os(s: Sessao) -> None:
+    con = s.console
+    ativas = s.container.ordens.fila_priorizada()
+    os_id = _selecionar_os(s, ativas, "OS ativas")
+    ordem = next(r for r in ativas if r.ordem.id == os_id)
+    con.info(f"  Atuais: {rotulo(ordem.ordem.especialidades)}"
+             + (f" · técnico atribuído: {ordem.tecnico}" if ordem.tecnico else ""))
+    novas = _escolher_especialidades(con, "Especialidades exigidas", ordem.ordem.especialidades)
+    atualizada = s.container.ordens.definir_especialidades(s.usuario, os_id, novas)
+    con.sucesso(f"OS #{os_id} agora exige: {rotulo(atualizada.especialidades)}.")
 
 
 def encerrar_os(s: Sessao) -> None:
@@ -311,5 +359,24 @@ def cadastrar_usuario(s: Sessao) -> None:
     con.secao("Cadastrar usuário")
     nome = con.texto("Nome")
     perfil = con.escolher("Perfil", [(p.value, p.value) for p in Perfil])
-    u = s.container.usuarios.cadastrar(s.usuario, nome, perfil)
-    con.sucesso(f"Usuário #{u.id} ({u.perfil}) cadastrado.")
+    esp = _escolher_especialidades(con, "Especialidades")
+    u = s.container.usuarios.cadastrar(s.usuario, nome, perfil, esp)
+    con.sucesso(f"Usuário #{u.id} ({u.perfil}) cadastrado · especialidades: {rotulo(u.especialidades)}.")
+
+
+def definir_especialidades_usuario(s: Sessao) -> None:
+    con = s.console
+    con.secao("Usuários")
+    usuarios = s.container.usuarios.listar()
+    con.tabela(
+        [Coluna("ID", 3, direita=True), Coluna("Nome", 8, flex=True), Coluna("Perfil", 7),
+         Coluna("Especialidades", 10, flex=True)],
+        [[f"#{u.id}", u.nome, u.perfil.value,
+          (fmt.especialidades(u.especialidades, "nenhuma"), "" if u.especialidades else Cor.CINZA)]
+         for u in usuarios],
+    )
+    usuario_id = con.inteiro("ID do usuário", {u.id for u in usuarios})
+    atual = next(u for u in usuarios if u.id == usuario_id)
+    novas = _escolher_especialidades(con, "Especialidades", atual.especialidades)
+    u = s.container.usuarios.definir_especialidades(s.usuario, usuario_id, novas)
+    con.sucesso(f"{u.nome}: {rotulo(u.especialidades)}.")

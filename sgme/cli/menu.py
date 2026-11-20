@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
+from sgme.domain.especialidades import rotulo
 from sgme.domain.excecoes import ErroDominio
 from sgme.services.permissoes import Acao
 from . import telas
@@ -43,6 +44,8 @@ COMANDOS: list[Comando] = [
     Comando("Ordens de serviço", "Detalhes e histórico de uma OS", telas.detalhes_os),
     Comando("Ordens de serviço", "Abrir novo chamado", telas.abrir_chamado, Acao.ABRIR_OS),
     Comando("Gestão", "Atribuir / reatribuir técnico", telas.atribuir_os, Acao.ATRIBUIR_OS),
+    Comando("Gestão", "Definir especialidades exigidas da OS", telas.definir_especialidades_os,
+            Acao.ATRIBUIR_OS),
     Comando("Gestão", "Aprovar, devolver ou cancelar OS", telas.encerrar_os, Acao.ENCERRAR_OS),
     Comando("Trabalho técnico", "Registrar diagnóstico", telas.registrar_diagnostico, Acao.TRABALHAR_OS),
     Comando("Trabalho técnico", "Apontar horas e peças", telas.apontar_reparo, Acao.TRABALHAR_OS),
@@ -54,6 +57,8 @@ COMANDOS: list[Comando] = [
             Acao.GERENCIAR_EQUIPAMENTOS),
     Comando("Cadastros", "Disponibilidade da equipe", telas.equipe),
     Comando("Cadastros", "Cadastrar usuário", telas.cadastrar_usuario, Acao.GERENCIAR_USUARIOS),
+    Comando("Cadastros", "Definir especialidades de usuário", telas.definir_especialidades_usuario,
+            Acao.GERENCIAR_USUARIOS),
 ]
 
 
@@ -82,7 +87,9 @@ class Menu:
             u = self._s.usuario
             con.limpar()
             con.cabecalho("SGME · Gestão de Manutenção",
-                          f"{u.nome} · {u.perfil}" + (f" · {u.status}" if u.eh_tecnico else ""))
+                          f"{u.nome} · {u.perfil}"
+                          + (f" · {u.status} · {rotulo(u.especialidades, 'sem especialidade')}"
+                             if u.eh_tecnico else ""))
             self._exibir()
             con.escrever()
             try:
