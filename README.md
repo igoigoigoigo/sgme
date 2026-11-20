@@ -19,7 +19,7 @@ O relatório técnico completo está em [docs/RELATORIO.md](docs/RELATORIO.md).
 ## Como executar
 
 ```powershell
-git clone <url-do-repositorio> sgme
+git clone https://github.com/igoigoigoigo/sgme.git
 cd sgme
 python main.py
 ```
