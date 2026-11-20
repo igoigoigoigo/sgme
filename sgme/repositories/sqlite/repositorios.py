@@ -9,6 +9,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime
 
+from sgme.domain.especialidades import Especialidade
 from sgme.domain.entidades import (
     FORMATO_DATA, Equipamento, EventoHistorico, FiltroOS, OrdemServico, Perfil, Usuario,
 )
@@ -27,6 +28,38 @@ def _texto(data: datetime | None) -> str | None:
     return data.strftime(FORMATO_DATA) if data else None
 
 
+class _TabelaEspecialidades:
+    """Relação N:N entre uma entidade e suas especialidades (tabela associativa).
+
+    Zero linhas = nenhuma especialidade; várias linhas = várias especialidades."""
+
+    def __init__(self, tabela: str, coluna: str) -> None:
+        self._tabela, self._coluna = tabela, coluna
+
+    def carregar(self, c: sqlite3.Connection, ids: list[int]) -> dict[int, frozenset[Especialidade]]:
+        if not ids:
+            return {}
+        resultado: dict[int, set[Especialidade]] = {i: set() for i in ids}
+        marcadores = ", ".join("?" * len(ids))
+        for r in c.execute(
+            f"SELECT {self._coluna} AS dono, especialidade FROM {self._tabela} "
+            f"WHERE {self._coluna} IN ({marcadores})", ids,
+        ):
+            resultado[r["dono"]].add(Especialidade.de_texto(r["especialidade"]))
+        return {k: frozenset(v) for k, v in resultado.items()}
+
+    def gravar(self, c: sqlite3.Connection, dono_id: int, valores: frozenset[Especialidade]) -> None:
+        c.execute(f"DELETE FROM {self._tabela} WHERE {self._coluna} = ?", (dono_id,))
+        c.executemany(
+            f"INSERT INTO {self._tabela} ({self._coluna}, especialidade) VALUES (?, ?)",
+            [(dono_id, e.value) for e in valores],
+        )
+
+
+_ESP_USUARIO = _TabelaEspecialidades("usuario_especialidades", "usuario_id")
+_ESP_OS = _TabelaEspecialidades("os_especialidades", "os_id")
+
+
 class _RepositorioSQLite:
     def __init__(self, db: Database) -> None:
         self._db = db
@@ -34,20 +67,23 @@ class _RepositorioSQLite:
 
 class UsuarioRepositorySQLite(_RepositorioSQLite, UsuarioRepository):
     @staticmethod
-    def _mapear(r: sqlite3.Row) -> Usuario:
-        return Usuario(id=r["id"], nome=r["nome"], perfil=r["perfil"], status=r["status"])
+    def _mapear_varios(c: sqlite3.Connection, linhas: list[sqlite3.Row]) -> list[Usuario]:
+        esp = _ESP_USUARIO.carregar(c, [r["id"] for r in linhas])
+        return [Usuario(id=r["id"], nome=r["nome"], perfil=r["perfil"], status=r["status"],
+                        especialidades=esp.get(r["id"], frozenset())) for r in linhas]
 
     def obter(self, usuario_id: int) -> Usuario | None:
         with self._db.conexao() as c:
-            r = c.execute("SELECT * FROM usuarios WHERE id = ?", (usuario_id,)).fetchone()
-        return self._mapear(r) if r else None
+            linhas = c.execute("SELECT * FROM usuarios WHERE id = ?", (usuario_id,)).fetchall()
+            encontrados = self._mapear_varios(c, linhas)
+        return encontrados[0] if encontrados else None
 
     def listar(self, perfil: Perfil | None = None) -> list[Usuario]:
         sql, params = "SELECT * FROM usuarios", ()
         if perfil is not None:
             sql, params = sql + " WHERE perfil = ?", (perfil.value,)
         with self._db.conexao() as c:
-            return [self._mapear(r) for r in c.execute(sql + " ORDER BY id", params)]
+            return self._mapear_varios(c, c.execute(sql + " ORDER BY id", params).fetchall())
 
     def adicionar(self, usuario: Usuario) -> Usuario:
         with self._db.conexao() as c:
@@ -56,6 +92,7 @@ class UsuarioRepositorySQLite(_RepositorioSQLite, UsuarioRepository):
                 (usuario.nome, usuario.perfil.value, usuario.status.value),
             )
             usuario.id = cur.lastrowid
+            _ESP_USUARIO.gravar(c, usuario.id, usuario.especialidades)
         return usuario
 
     def atualizar(self, usuario: Usuario) -> None:
@@ -64,6 +101,7 @@ class UsuarioRepositorySQLite(_RepositorioSQLite, UsuarioRepository):
                 "UPDATE usuarios SET nome = ?, perfil = ?, status = ? WHERE id = ?",
                 (usuario.nome, usuario.perfil.value, usuario.status.value, usuario.id),
             )
+            _ESP_USUARIO.gravar(c, usuario.id, usuario.especialidades)
 
 
 class EquipamentoRepositorySQLite(_RepositorioSQLite, EquipamentoRepository):
@@ -108,9 +146,15 @@ class OrdemServicoRepositorySQLite(_RepositorioSQLite, OrdemServicoRepository):
         "data_abertura", "data_encerramento",
     )
 
+    @classmethod
+    def _mapear_varios(cls, c: sqlite3.Connection, linhas: list[sqlite3.Row]) -> list[OrdemServico]:
+        esp = _ESP_OS.carregar(c, [r["id"] for r in linhas])
+        return [cls._mapear(r, esp.get(r["id"], frozenset())) for r in linhas]
+
     @staticmethod
-    def _mapear(r: sqlite3.Row) -> OrdemServico:
+    def _mapear(r: sqlite3.Row, especialidades: frozenset = frozenset()) -> OrdemServico:
         return OrdemServico(
+            especialidades=especialidades,
             id=r["id"], equipamento_id=r["equipamento_id"], criador_id=r["criador_id"],
             tecnico_id=r["tecnico_id"], falha_apontada=r["falha_apontada"],
             criticidade=r["criticidade"], status=r["status"], diagnostico=r["diagnostico"],
@@ -128,8 +172,9 @@ class OrdemServicoRepositorySQLite(_RepositorioSQLite, OrdemServicoRepository):
 
     def obter(self, os_id: int) -> OrdemServico | None:
         with self._db.conexao() as c:
-            r = c.execute("SELECT * FROM ordens_servico WHERE id = ?", (os_id,)).fetchone()
-        return self._mapear(r) if r else None
+            linhas = c.execute("SELECT * FROM ordens_servico WHERE id = ?", (os_id,)).fetchall()
+            encontradas = self._mapear_varios(c, linhas)
+        return encontradas[0] if encontradas else None
 
     def listar(self, filtro: FiltroOS | None = None) -> list[OrdemServico]:
         condicoes: list[str] = []
@@ -143,6 +188,11 @@ class OrdemServicoRepositorySQLite(_RepositorioSQLite, OrdemServicoRepository):
                 condicoes.append("tecnico_id = ?"); params.append(filtro.tecnico_id)
             if filtro.equipamento_id is not None:
                 condicoes.append("equipamento_id = ?"); params.append(filtro.equipamento_id)
+            if filtro.especialidade is not None:
+                condicoes.append(
+                    "id IN (SELECT os_id FROM os_especialidades WHERE especialidade = ?)"
+                )
+                params.append(filtro.especialidade.value)
             if filtro.apenas_ativas:
                 finais = (StatusOS.CONCLUIDA.value, StatusOS.CANCELADA.value)
                 condicoes.append("status NOT IN (?, ?)"); params.extend(finais)
@@ -156,7 +206,7 @@ class OrdemServicoRepositorySQLite(_RepositorioSQLite, OrdemServicoRepository):
         if condicoes:
             sql += " WHERE " + " AND ".join(condicoes)
         with self._db.conexao() as c:
-            return [self._mapear(r) for r in c.execute(sql + " ORDER BY id DESC", params)]
+            return self._mapear_varios(c, c.execute(sql + " ORDER BY id DESC", params).fetchall())
 
     def adicionar(self, ordem: OrdemServico) -> OrdemServico:
         marcadores = ", ".join("?" * len(self._COLUNAS))
@@ -166,6 +216,7 @@ class OrdemServicoRepositorySQLite(_RepositorioSQLite, OrdemServicoRepository):
                 self._valores(ordem),
             )
             ordem.id = cur.lastrowid
+            _ESP_OS.gravar(c, ordem.id, ordem.especialidades)
         return ordem
 
     def atualizar(self, ordem: OrdemServico) -> None:
@@ -173,6 +224,7 @@ class OrdemServicoRepositorySQLite(_RepositorioSQLite, OrdemServicoRepository):
         with self._db.conexao() as c:
             c.execute(f"UPDATE ordens_servico SET {atribuicoes} WHERE id = ?",
                       (*self._valores(ordem), ordem.id))
+            _ESP_OS.gravar(c, ordem.id, ordem.especialidades)
 
 
 class HistoricoRepositorySQLite(_RepositorioSQLite, HistoricoRepository):
