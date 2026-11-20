@@ -45,3 +45,9 @@ def popular_se_vazio(container: Container) -> bool:
     ordens.abrir(gestor, torno.id, "Folga no carro transversal", "Baixa")
     return True
 
+
+
+def garantir_gestor(container: Container) -> None:
+    """Sem dados de demonstração, cria apenas um gestor para permitir o primeiro acesso."""
+    if not container.repositorios.usuarios.listar():
+        container.repositorios.usuarios.adicionar(Usuario("Gestor Admin", Perfil.GESTOR))
